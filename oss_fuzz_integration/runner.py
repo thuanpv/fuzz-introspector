@@ -256,7 +256,7 @@ def run_all_fuzzers(project_name, fuzztime, job_count, corpus_dir):
                 shutil.move(l, target_crashes)
 
 
-def get_coverage(project_name, corpus_dir):
+def get_coverage(project_name, corpus_dir, seed_analysis):
     #1 Find all coverage reports
     if corpus_dir is None:
         corpus_dir = get_recent_corpus_dir()
@@ -271,14 +271,25 @@ def get_coverage(project_name, corpus_dir):
             )
 
     #3 run coverage command
-    cmd = [
-        "python3",
-        "infra/helper.py",
-        "coverage",
-        "--port ''",
-        "--no-corpus-download",
-        project_name
-    ]
+    if seed_analysis:
+        cmd = [
+            "python3",
+            "infra/helper.py",
+            "coverage",
+            "--port ''",
+            "--no-corpus-download",
+            "--seed-analysis",
+            project_name
+        ]
+    else:
+        cmd = [
+            "python3",
+            "infra/helper.py",
+            "coverage",
+            "--port ''",
+            "--no-corpus-download",
+            project_name
+        ]
     try:
         subprocess.check_call(
             " ".join(cmd),
@@ -335,7 +346,8 @@ def complete_coverage_check(
     fuzztime: int,
     job_count: int,
     corpus_dir: Optional[str],
-    download_public_corpus: bool
+    download_public_corpus: bool,
+    seed_analysis: bool
 ):
     # Check if it is JVM Project
     if get_project_lang(project_name) == 'jvm':
@@ -353,7 +365,7 @@ def complete_coverage_check(
 
     run_all_fuzzers(project_name, fuzztime, job_count, corpus_dir)
     build_project(project_name, sanitizer="coverage")
-    percent = get_coverage(project_name, corpus_dir)
+    percent = get_coverage(project_name, corpus_dir, seed_analysis)
 
     return percent
 
@@ -365,7 +377,8 @@ def introspector_run(
     corpus_dir: Optional[str],
     port: int,
     download_public_corpus: bool,
-    collect_coverage: bool
+    collect_coverage: bool,
+    seed_analysis: bool
 ):
     if collect_coverage:
         complete_coverage_check(
@@ -373,7 +386,8 @@ def introspector_run(
             fuzztime,
             job_count,
             corpus_dir,
-            download_public_corpus
+            download_public_corpus,
+            seed_analysis
         )
     else:
         build_project(project_name, to_clean=True)
@@ -517,6 +531,12 @@ def get_cmdline_parser() -> argparse.ArgumentParser:
         help="Do not run coverage in this case",
         default=False
     )
+    introspector_parser.add_argument(
+        "--seed-analysis",
+        action="store_true",
+        help="if set, run analysis for each seed in the corpus",
+        default=False
+    )
 
     download_corpus_parser = subparsers.add_parser("download-corpus")
     download_corpus_parser.add_argument(
@@ -550,7 +570,8 @@ if __name__ == "__main__":
             args.corpus_dir,
             args.port,
             args.download_public_corpus,
-            not args.no_coverage
+            not args.no_coverage,
+            args.seed_analysis
         )
     elif args.command == "download-corpus":
         download_full_public_corpus(args.project)
