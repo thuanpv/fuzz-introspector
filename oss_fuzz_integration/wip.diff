@@ -1,0 +1,93 @@
+diff --git a/infra/base-images/base-runner/coverage b/infra/base-images/base-runner/coverage
+index 1d1e1d94..d3ebc47a 100755
+--- a/infra/base-images/base-runner/coverage
++++ b/infra/base-images/base-runner/coverage
+@@ -90,39 +90,40 @@ function run_fuzz_target {
+   # because (A) corpuses are already minimized; (B) we do not use sancov, and so
+   # libFuzzer always finishes merge with an empty output dir.
+   # Use 100s timeout instead of 25s as code coverage builds can be very slow.
+-  local args="-merge=1 -timeout=100 $corpus_dummy $corpus_real"
+-
+-  export LLVM_PROFILE_FILE=$profraw_file
+-  timeout $TIMEOUT $OUT/$target $args &> $LOGS_DIR/$target.log
+-  if (( $? != 0 )); then
+-    echo "Error occured while running $target:"
+-    cat $LOGS_DIR/$target.log
+-  fi
++  local temp_corpus="$OUT/temp_corpus"
++  for fname in $(echo $corpus_real/*); do
++    rm -rf $temp_corpus && mkdir -p $temp_corpus
++    cp $fname $temp_corpus
++    local args="-merge=1 -timeout=100 $corpus_dummy $temp_corpus"
++    profraw_seed_file="$DUMPS_DIR/$(basename $fname).profraw"
++    profdata_seed_file="$DUMPS_DIR/$(basename $fname).profdata"
++    export LLVM_PROFILE_FILE=$profraw_seed_file
++
++    timeout $TIMEOUT $OUT/$target $args &> $LOGS_DIR/$target.log
++    if (( $? != 0 )); then
++      echo "Error occured while running $target:"
++      cat $LOGS_DIR/$target.log
++    fi
+ 
+-  rm -rf $corpus_dummy
+-  if (( $(du -c $profraw_file_mask | tail -n 1 | cut -f 1) == 0 )); then
+-    # Skip fuzz targets that failed to produce profile dumps.
+-    return 0
+-  fi
++    rm -rf $corpus_dummy && mkdir -p $corpus_dummy
+ 
+-  # If necessary translate to latest profraw version.
+-  if [[ $target == *"@"* ]]; then
+-    # Extract fuzztest binary name from fuzztest wrapper script.
+-    target=(${target//@/ }[0])
+-  fi
+-  profraw_update.py $OUT/$target $profraw_file_mask $profraw_file_mask
+-  llvm-profdata merge -j=1 -sparse $profraw_file_mask -o $profdata_file
++    llvm-profdata merge -j=1 -sparse $profraw_seed_file -o $profdata_seed_file
++  done
+ 
+-  # Delete unnecessary and (potentially) large .profraw files.
+-  rm $profraw_file_mask
++  profdata_file_mask="$DUMPS_DIR/*.profdata"
++  llvm-profdata merge -j=1 -sparse $profdata_file_mask -o $profdata_file
+ 
+   shared_libraries=$(coverage_helper shared_libs -build-dir=$OUT -object=$target)
+ 
+   llvm-cov export -summary-only -instr-profile=$profdata_file -object=$target \
+-      $shared_libraries $LLVM_COV_COMMON_ARGS > $FUZZER_STATS_DIR/$target.json
++        $shared_libraries $LLVM_COV_COMMON_ARGS > $FUZZER_STATS_DIR/$target.json
+ 
+   # For introspector.
+   llvm-cov show -instr-profile=$profdata_file -object=$target -line-coverage-gt=0 $shared_libraries $BRANCH_COV_ARGS $LLVM_COV_COMMON_ARGS > ${TEXTCOV_REPORT_DIR}/$target.covreport
++  for fname in $(echo $corpus_real/*); do
++    profdata_seed_file="$DUMPS_DIR/$(basename $fname).profdata"
++    llvm-cov show -instr-profile=$profdata_seed_file -object=$target -line-coverage-gt=0 $shared_libraries $BRANCH_COV_ARGS $LLVM_COV_COMMON_ARGS > ${TEXTCOV_REPORT_DIR}/$(basename $fname).covreport
++  done
+ }
+ 
+ function run_go_fuzz_target {
+diff --git a/infra/helper.py b/infra/helper.py
+index 8d17cb8c..1cc8e6f0 100755
+--- a/infra/helper.py
++++ b/infra/helper.py
+@@ -313,6 +313,10 @@ def get_parser():  # pylint: disable=too-many-statements
+                                help='do not download corpus backup from '
+                                'OSS-Fuzz; use corpus located in '
+                                'build/corpus/<project>/<fuzz_target>/')
++  coverage_parser.add_argument('--seed-analysis',
++                               default=False,
++                               action='store_true',
++                               help='use this option to enable coverage analysis per seed')
+   coverage_parser.add_argument('--port',
+                                default='8008',
+                                help='specify port for'
+@@ -916,6 +920,9 @@ def coverage(args):
+       'ARCHITECTURE=' + args.architecture,
+   ]
+ 
++  if args.seed_analysis:
++      env.append('SEED_ANALYSIS=True')
++
+   run_args = _env_to_docker_args(env)
+ 
+   if args.port:
